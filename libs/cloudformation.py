@@ -1,6 +1,5 @@
 import logging
 import time
-from pprint import pprint
 import json
 from cfn_flip import to_json
 from copy import deepcopy
@@ -10,7 +9,7 @@ def verify_action(action, stack_name):
     logging.warning(f'You are about to perform: {action} on stack: {stack_name}')
     read_input = str(input('Are you sure you want to continue? (YES to do so): '))
     if read_input != 'YES':
-        logging.warning('Skipping step as requested')
+        logging.info('Skipping step as requested')
         return False
     return True
 
@@ -51,7 +50,7 @@ def stacks_importing_exports(aws_client, exports):
                       f'instead of the import name before continuing')
         logging.error(f'This will ensure the stack can be renamed without issue')
         continue_regardless = str(input(f'Do you wish to continue - '
-                                        f'even though this is guaranteed to fail? (Yes/no): '))
+                                        f'even though this is guaranteed to fail? (YES to do so): '))
         if continue_regardless != 'YES':
             logging.info('Wise Choice, exiting now')
             exit(0)
@@ -71,17 +70,12 @@ def remove_imports_from_stack_templates(aws_client, stacks_importing, exports):
             if not isinstance(stack_template, str):
                 stack_template = json.dumps(dict(stack_template))
             template = json.loads(to_json(stack_template))
-            # this is the point you realise that cloudformation absolutely sucks.
-            # hey if the amount of code required to just rename a stack wasn't already
-            # an indication...
-            # we can do a recursive / tree lookup through the template but
+            # We can do a recursive / tree lookup through the template but
             # if the imported value is using sub then matching against it
             # is difficult - everyone uses different patterns so cant do a generic thing
-            # basically you can never fully trust it - its just not worth the effort.
             # could add possibly a config parameter for user to define the pattern
-            # if they use sub for their imports etc - probably cleanest way of doing it
-            # too much effort for now.
-            pprint(template)
+            # if they use sub for their imports for example - probably the cleanest
+            # way of doing it - too much effort for now.
 
 
 def detect_drift(aws_client, stack_id):
@@ -109,7 +103,6 @@ def detect_drift(aws_client, stack_id):
         resource_drifts_result = aws_client.cfn_stack_resource_drifts(stack_id, next_token=token)
         resource_drifts += resource_drifts_result['StackResourceDrifts']
 
-    # logging.info(f"Resource Drifts: {pprint(resource_drifts)}")
     return resource_drifts
 
 
@@ -149,16 +142,23 @@ def sanitize_template(data, template, resources, drifts):
             if k not in supported_imports.keys():
                 supported_imports[k] = template['Resources'][k]['Type']
 
-    logging.info(f'Supported imports: {supported_imports}')
-    logging.info(f'Unsupported imports: {non_importables}')
-    logging.info(f'Unsupported drifts: {non_driftables}')
+    logging.debug(f'Supported imports: {supported_imports}')
+    logging.debug(f'Unsupported imports: {non_importables}')
+    logging.debug(f'Unsupported drifts: {non_driftables}')
     return supported_imports, non_importables, non_driftables, sanitized_template
 
 
-def sanitize_resources(data, drifts, template):
+def sanitize_resources(data, drifts, template, supported_resources):
     import_resources = []
+    import_resource_counter = 0
     resource_identifiers = data['cloudformation']['resource_identifiers']
     sanitized_template = deepcopy(template)
+    logging.info(f'Sanitizing resources for creating change set...')
+
+    for resource in supported_resources.keys():
+        sanitized_template['Resources'][resource]['DeletionPolicy'] = 'Retain'
+        logging.debug(f'Added Retain Deletion Policy to resource: {resource}')
+
     for drifted_resource in drifts:
         resource_identifier = {}
 
@@ -172,7 +172,7 @@ def sanitize_resources(data, drifts, template):
         if len(import_properties) > 1:
             logging.error(f'{drifted_resource}: Unexpected additional '
                           f'importable keys required {import_properties}, aborting...')
-            quit()
+            raise ValueError(f'Too many import properties: {import_properties}, should only have 1')
         elif len(import_properties) == 1:
             resource_identifier[import_properties[0]] = drifted_resource['PhysicalResourceId']
 
@@ -181,19 +181,24 @@ def sanitize_resources(data, drifts, template):
             'Type': drifted_resource['ResourceType'],
             'Properties': json.loads(drifted_resource['ActualProperties'])
         }
+        logging.info(f'Updating stack resource: {drifted_resource["LogicalResourceId"]}')
+        logging.debug(f'Updating stack resource as follows: '
+                      f'{sanitized_template["Resources"][drifted_resource["LogicalResourceId"]]}')
 
         import_resources.append({
             'ResourceType': drifted_resource['ResourceType'],
             'LogicalResourceId': drifted_resource['LogicalResourceId'],
             'ResourceIdentifier': resource_identifier
         })
+        logging.info(f'Added the following to import resources: '
+                     f'{import_resources[import_resource_counter]}')
+        import_resource_counter += 1
     return sanitized_template, import_resources
 
 
 def set_resource_retention(template, supported_resources):
     retain_template = deepcopy(template)
-    pprint(supported_resources)
-    for resource in supported_resources:
+    for resource in supported_resources.keys():
         retain_template['Resources'][resource]['DeletionPolicy'] = 'Retain'
         logging.info(f'Added Retain Deletion Policy to resource: {resource}')
 
