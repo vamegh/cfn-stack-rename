@@ -15,6 +15,8 @@
 #  aws_handler - This handles various aws functions
 
 import base64
+import time
+
 import boto3
 import json
 import logging
@@ -116,13 +118,12 @@ class AWS(object):
             service_name='cloudformation',
             region_name=aws_region
         )
-        print(f'Client currently: {self.client}')
 
     def cfn_describe_stack(self, stack_name):
         try:
             response = self.client.describe_stacks(StackName=stack_name)
         except (ClientError, NoCredentialsError):
-            logging.warning(f'Service: {stack_name} doesnt have cloud template profile :: Skipping')
+            logging.info(f'Service: {stack_name} doesnt have cloud template profile :: Skipping')
             return None
         return response['Stacks'][0]
 
@@ -137,7 +138,7 @@ class AWS(object):
             return None
         return response['TemplateBody']
 
-    def cfn_get_resources(self, stack_id):
+    def cfn_describe_resources(self, stack_id):
         try:
             response = self.client.describe_stack_resources(
                 StackName=stack_id
@@ -169,6 +170,129 @@ class AWS(object):
             return None
 
         return response
+
+    def cfn_stack_resource_drifts(self, stack_id, next_token=None):
+        stack_drift_filters = [
+            'IN_SYNC',
+            'MODIFIED',
+            'DELETED',
+            'NOT_CHECKED'
+        ]
+        if not next_token:
+            response = self.client.describe_stack_resource_drifts(
+                StackName=stack_id,
+                StackResourceDriftStatusFilters=stack_drift_filters,
+                MaxResults=100,
+            )
+        else:
+            response = self.client.describe_stack_resource_drifts(
+                StackName=stack_id,
+                StackResourceDriftStatusFilters=stack_drift_filters,
+                MaxResults=100,
+                NextToken=next_token
+            )
+
+        return response
+
+    def cfn_update_stack(self, stack_id, template, capabilities=None, params=None):
+        if not isinstance(template, str):
+            template = json.dumps(template)
+        if not capabilities:
+            capabilities = [
+                'CAPABILITY_NAMED_IAM',
+                'CAPABILITY_AUTO_EXPAND'
+            ]
+        response = self.client.update_stack(
+            StackName=stack_id,
+            TemplateBody=template,
+            Capabilities=capabilities,
+            Parameters=params
+        )
+        return response
+
+    def cfn_create_changeset(self, stack_name, template, resources, params=None,
+                             changeset_name=None, changeset_type=None, capabilities=None):
+        if not isinstance(template, str):
+            template = json.dumps(template)
+        if not capabilities:
+            capabilities = [
+                'CAPABILITY_NAMED_IAM',
+                'CAPABILITY_AUTO_EXPAND'
+            ]
+        if not changeset_type:
+            changeset_type = 'IMPORT'
+        if not changeset_name:
+            changeset_name = 'Stack-Rename-' + str(int(time.time()))
+        response = self.client.create_change_set(
+            StackName=stack_name,
+            ChangeSetName=changeset_name,
+            TemplateBody=template,
+            ChangeSetType=changeset_type,
+            Capabilities=capabilities,
+            ResourcesToImport=resources,
+            Parameters=params
+        )
+        return response["StackId"], response
+
+    def cfn_exec_changeset(self, changeset_name, stack_id):
+        response = self.client.execute_change_set(
+            ChangeSetName=changeset_name,
+            StackName=stack_id
+        )
+        return response
+
+    def cfn_list_imports(self, export_name, next_token=None):
+        if not next_token:
+            response = self.client.list_imports(
+                ExportName=export_name,
+            )
+        else:
+            response = self.client.list_imports(
+                ExportName=export_name,
+                NextToken=next_token
+            )
+        #return response['Imports'], response['NextToken']
+        return response
+
+    def cfn_list_exports(self, next_token=None):
+        if not next_token:
+            response = self.client.list_exports()
+        else:
+            response = self.client.list_exports(
+                NextToken=next_token
+            )
+        return response
+
+    def cfn_delete_stack(self, stack_id):
+        response = self.client.delete_stack(
+            StackName=stack_id
+        )
+        return response
+
+    def cfn_waiter(self, stack_id, waiter_type, changeset_name=None, delay=None, attempts=None):
+        if not attempts:
+            attempts = 360
+        if not delay:
+            delay = 10
+
+        waiter_config = {
+            'Delay': delay,
+            'MaxAttempts': attempts
+        }
+
+        waiter = self.client.get_waiter(waiter_type)
+
+        if changeset_name:
+            waiter.wait(
+                StackName=stack_id,
+                ChangeSetName=changeset_name,
+                WaiterConfig=waiter_config
+            )
+        else:
+            waiter.wait(
+                StackName=stack_id,
+                WaiterConfig=waiter_config
+            )
 
     def get_secret(self, secret=None):
         secret_data = {}

@@ -2,7 +2,7 @@ import boto3
 import sys
 import json
 import time
-import pprint
+from pprint import pprint
 from collections import OrderedDict
 from cfn_flip import flip, to_yaml, to_json
 from libs import cfn_resource_identifiers
@@ -133,10 +133,15 @@ while 'NextToken' in resource_drifts_result:
 
 template = json.loads(to_json(original_template))
 
+print("********* TEMPLATE :: ")
+pprint(template)
+
 # check all is in drift results
+#pprint(f'resource identifiers: {eligible_import_resources.keys()}')
 for k, v in template['Resources'].items():
     found = False
     resource_exists = False
+    print(f'Template resource scanning currently: {k}: {v}')
 
     for deployed_resource in original_resources:
         if k == deployed_resource['LogicalResourceId']:
@@ -161,24 +166,24 @@ for k, v in template['Resources'].items():
 
 print("Setting resource retention...")
 
-cfnclient.update_stack(
-    StackName=original_stack_id,
-    TemplateBody=json.dumps(template),
-    Capabilities=[
-        'CAPABILITY_NAMED_IAM',
-        'CAPABILITY_AUTO_EXPAND'
-    ],
-    Parameters=stack_params
-)
+#cfnclient.update_stack(
+#    StackName=original_stack_id,
+#    TemplateBody=json.dumps(template),
+#    Capabilities=[
+#        'CAPABILITY_NAMED_IAM',
+#        'CAPABILITY_AUTO_EXPAND'
+#    ],
+#    Parameters=stack_params
+#)
 
-waiter = cfnclient.get_waiter('stack_update_complete')
-waiter.wait(
-    StackName=original_stack_id,
-    WaiterConfig={
-        'Delay': 10,
-        'MaxAttempts': 360
-    }
-)
+#waiter = cfnclient.get_waiter('stack_update_complete')
+#waiter.wait(
+#    StackName=original_stack_id,
+#    WaiterConfig={
+#        'Delay': 10,
+#        'MaxAttempts': 360
+#    }
+#)
 
 import_resources = []
 for drifted_resource in resource_drifts:
@@ -211,80 +216,80 @@ for drifted_resource in resource_drifts:
 
 print("Removing original stack (whilst retaining resources!)...")
 
-cfnclient.delete_stack(
-    StackName=original_stack_id
-)
+#cfnclient.delete_stack(
+#    StackName=original_stack_id
+#)
 
-waiter = cfnclient.get_waiter('stack_delete_complete')
-waiter.wait(
-    StackName=original_stack_id,
-    WaiterConfig={
-        'Delay': 10,
-        'MaxAttempts': 360
-    }
-)
+#waiter = cfnclient.get_waiter('stack_delete_complete')
+#waiter.wait(
+#    StackName=original_stack_id,
+#    WaiterConfig={
+#        'Delay': 10,
+#        'MaxAttempts': 360
+#    }
+#)
 
 print("Recreating stack with imported resources...")
 
 template.pop('Outputs', None)
 
 change_set_name = 'Stack-Rename-' + str(int(time.time()))
-new_stack_id = cfnclient.create_change_set(
-    StackName=new_stack_name,
-    ChangeSetName=change_set_name,
-    TemplateBody=json.dumps(template),
-    ChangeSetType='IMPORT',
-    Capabilities=[
-        'CAPABILITY_NAMED_IAM',
-        'CAPABILITY_AUTO_EXPAND'
-    ],
-    ResourcesToImport=import_resources,
-    Parameters=stack_params
-)['StackId']
+#new_stack_id = cfnclient.create_change_set(
+#    StackName=new_stack_name,
+#    ChangeSetName=change_set_name,
+#    TemplateBody=json.dumps(template),
+#    ChangeSetType='IMPORT',
+#    Capabilities=[
+#        'CAPABILITY_NAMED_IAM',
+#        'CAPABILITY_AUTO_EXPAND'
+#    ],
+#    ResourcesToImport=import_resources,
+#    Parameters=stack_params
+#)['StackId']
 
-waiter = cfnclient.get_waiter('change_set_create_complete')
-waiter.wait(
-    StackName=new_stack_id,
-    ChangeSetName=change_set_name,
-    WaiterConfig={
-        'Delay': 10,
-        'MaxAttempts': 360
-    }
-)
+#waiter = cfnclient.get_waiter('change_set_create_complete')
+#waiter.wait(
+#    StackName=new_stack_id,
+#    ChangeSetName=change_set_name,
+#    WaiterConfig={
+#        'Delay': 10,
+#        'MaxAttempts': 360
+#    }
+#)
 
-cfnclient.execute_change_set(
-    ChangeSetName=change_set_name,
-    StackName=new_stack_id
-)
+#cfnclient.execute_change_set(
+#    ChangeSetName=change_set_name,
+#    StackName=new_stack_id
+#)
 
-waiter = cfnclient.get_waiter('stack_import_complete')
-waiter.wait(
-    StackName=new_stack_id,
-    WaiterConfig={
-        'Delay': 10,
-        'MaxAttempts': 360
-    }
-)
+#waiter = cfnclient.get_waiter('stack_import_complete')
+#waiter.wait(
+#    StackName=new_stack_id,
+#    WaiterConfig={
+#        'Delay': 10,
+#        'MaxAttempts': 360
+#    }
+#)
 
 print("Cleaning up...")
 
-cfnclient.update_stack(
-    StackName=new_stack_id,
-    TemplateBody=original_template,
-    Capabilities=[
-        'CAPABILITY_NAMED_IAM',
-        'CAPABILITY_AUTO_EXPAND'
-    ],
-    Parameters=stack_params
-)
+#cfnclient.update_stack(
+#    StackName=new_stack_id,
+#    TemplateBody=original_template,
+#    Capabilities=[
+#        'CAPABILITY_NAMED_IAM',
+#        'CAPABILITY_AUTO_EXPAND'
+#    ],
+#    Parameters=stack_params
+#)
 
-waiter = cfnclient.get_waiter('stack_update_complete')
-waiter.wait(
-    StackName=new_stack_id,
-    WaiterConfig={
-        'Delay': 10,
-        'MaxAttempts': 360
-    }
-)
+#waiter = cfnclient.get_waiter('stack_update_complete')
+#waiter.wait(
+#    StackName=new_stack_id,
+#    WaiterConfig={
+#        'Delay': 10,
+#        'MaxAttempts': 360
+#    }
+#)
 
 print("Succcessfully renamed stack")
