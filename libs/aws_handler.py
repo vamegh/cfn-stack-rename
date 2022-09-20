@@ -15,6 +15,7 @@
 #  aws_handler - This handles various aws functions
 
 import base64
+import os
 import time
 
 import boto3
@@ -119,6 +120,42 @@ class AWS(object):
             region_name=aws_region
         )
 
+    def s3_client(self):
+        aws_region = self.data['aws']['region']
+        self.client = self.session.client(
+            service_name='s3',
+            region_name=aws_region
+        )
+
+    def sts_client(self):
+        aws_region = self.data['aws']['region']
+        self.client = self.session.client(
+            service_name='sts',
+        )
+
+    def get_identity(self):
+        response = self.client.get_caller_identity()
+        return response
+
+    def upload_s3(self, file_name, s3_path=None, bucket=None, object_name=None):
+        if not bucket:
+            bucket = self.data['s3']['bucket']
+
+        if not s3_path:
+            s3_path = self.data['s3']['path']
+
+        if not object_name:
+            object_name = os.path.basename(file_name)
+
+        object_name = f'{s3_path}/{object_name}'
+
+        try:
+            response = self.client.upload_file(file_name, bucket, object_name)
+        except ClientError as err:
+            logging.error(f'Cannot upload to s3: {err}')
+            return False
+        return True
+
     def cfn_describe_stack(self, stack_name):
         try:
             response = self.client.describe_stacks(StackName=stack_name)
@@ -142,7 +179,7 @@ class AWS(object):
         try:
             response = self.client.describe_stack_resources(
                 StackName=stack_id
-                )
+            )
         except (ClientError, NoCredentialsError):
             logging.error(f'Service: {stack_id} cannot retrieve resources :: Skipping')
             return None
@@ -153,7 +190,7 @@ class AWS(object):
         try:
             response = self.client.detect_stack_drift(
                 StackName=stack_id
-                )
+            )
         except (ClientError, NoCredentialsError):
             logging.error(f'Service: {stack_id} Cannot Detect stack drift :: Skipping')
             return None
@@ -164,7 +201,7 @@ class AWS(object):
         try:
             response = self.client.describe_stack_drift_detection_status(
                 StackDriftDetectionId=stack_drift_id
-                )
+            )
         except (ClientError, NoCredentialsError):
             logging.error(f'Service: {stack_drift_id} does not seem to exist :: Skipping')
             return None
@@ -202,12 +239,34 @@ class AWS(object):
                 'CAPABILITY_NAMED_IAM',
                 'CAPABILITY_AUTO_EXPAND'
             ]
-        response = self.client.update_stack(
-            StackName=stack_id,
-            TemplateBody=template,
-            Capabilities=capabilities,
-            Parameters=params
-        )
+        try:
+            response = self.client.update_stack(
+                StackName=stack_id,
+                TemplateBody=template,
+                Capabilities=capabilities,
+                Parameters=params
+            )
+        except ClientError as err:
+            logging.error(f'The following error occurred: {err}')
+            return "error"
+        return response
+
+    def cfn_s3_update_stack(self, stack_id, s3_url, capabilities=None, params=None):
+        if not capabilities:
+            capabilities = [
+                'CAPABILITY_NAMED_IAM',
+                'CAPABILITY_AUTO_EXPAND'
+            ]
+        try:
+            response = self.client.update_stack(
+                StackName=stack_id,
+                TemplateURL=s3_url,
+                Capabilities=capabilities,
+                Parameters=params
+            )
+        except ClientError as err:
+            logging.error(f'The following error occurred: {err}')
+            return "error"
         return response
 
     def cfn_create_changeset(self, stack_name, template, resources, params=None,
@@ -234,6 +293,28 @@ class AWS(object):
         )
         return response["StackId"], response
 
+    def cfn_s3_create_changeset(self, stack_name, s3_url, resources, params=None,
+                                changeset_name=None, changeset_type=None, capabilities=None):
+        if not capabilities:
+            capabilities = [
+                'CAPABILITY_NAMED_IAM',
+                'CAPABILITY_AUTO_EXPAND'
+            ]
+        if not changeset_type:
+            changeset_type = 'IMPORT'
+        if not changeset_name:
+            changeset_name = 'Stack-Rename-' + str(int(time.time()))
+        response = self.client.create_change_set(
+            StackName=stack_name,
+            ChangeSetName=changeset_name,
+            TemplateURL=s3_url,
+            ChangeSetType=changeset_type,
+            Capabilities=capabilities,
+            ResourcesToImport=resources,
+            Parameters=params
+        )
+        return response["StackId"], response
+
     def cfn_exec_changeset(self, changeset_name, stack_id):
         response = self.client.execute_change_set(
             ChangeSetName=changeset_name,
@@ -242,16 +323,20 @@ class AWS(object):
         return response
 
     def cfn_list_imports(self, export_name, next_token=None):
-        if not next_token:
-            response = self.client.list_imports(
-                ExportName=export_name,
-            )
-        else:
-            response = self.client.list_imports(
-                ExportName=export_name,
-                NextToken=next_token
-            )
-        #return response['Imports'], response['NextToken']
+        try:
+            if not next_token:
+                response = self.client.list_imports(
+                    ExportName=export_name,
+                )
+            else:
+                response = self.client.list_imports(
+                    ExportName=export_name,
+                    NextToken=next_token
+                )
+        except ClientError as err:
+            logging.info(f'No exports found: {err}')
+            return None
+
         return response
 
     def cfn_list_exports(self, next_token=None):
@@ -294,6 +379,39 @@ class AWS(object):
                 WaiterConfig=waiter_config
             )
 
+    def get_ssm_param(self, name=None, decrypt=False):
+        if not name:
+            for param in self.data['ssm']['parameters']:
+                print(f'parameter: {param}')
+        try:
+            response = self.client.get_parameter(
+                Name=name,
+                WithDecryption=decrypt
+            )
+        except (ClientError, NoCredentialsError) as err:
+            logging.error(f'Error Occured: {err}')
+            return False
+        return response
+
+    def put_ssm_param(self, name, value, ssm_type='String',
+                      description=None, overwrite=False, tier='Standard', data_type='text'):
+        if not description:
+            description = f"{name}: Automatically generated by generate_ssm_parameters"
+        try:
+            response = self.client.put_parameter(
+                Name=name,
+                Description=description,
+                Value=value,
+                Type=ssm_type,
+                Overwrite=overwrite,
+                Tier=tier,
+                DataType=data_type
+            )
+        except (ClientError, NoCredentialsError) as err:
+            logging.error(f'Error Occured: {err}')
+            return False
+        return response
+
     def get_secret(self, secret=None):
         secret_data = {}
         secret_name = secret.lower()
@@ -324,3 +442,11 @@ class AWS(object):
             secret_data[secret_name] = secret
 
         return secret_data
+
+    def close(self):
+        try:
+            response = self.client.close()
+        except (ClientError, NoCredentialsError) as err:
+            logging.error(f'Error Occured: {err}')
+            return False
+        return response

@@ -32,7 +32,7 @@ class CommandCheck(object):
             self.data['git']['repos'][repo]['path'] = os.path.join(git_base_path, repo)
             self.data['git']['repos'][repo]['name'] = repo
 
-    def aws(self):
+    def aws_auth(self):
         if 'aws' not in self.data:
             self.data['aws'] = {}
         if 'authenticate' not in self.data['aws']:
@@ -69,7 +69,74 @@ class CommandCheck(object):
 
         resource_data_file = self.data['configs']['resource_identifier_file']
         self.data['cloudformation'] = dict()
-        self.data['cloudformation'] = io_handle.read_file(config_file=resource_data_file, file_type='yaml')
+        self.data['cloudformation'] = io_handle.read_file(config_file=resource_data_file)
+
+    def aws_s3(self):
+        if 's3' not in self.data:
+            self.data['s3'] = dict()
+        if 'enable' not in self.data['s3']:
+            self.data['s3']['enable'] = False
+        if 'bucket' not in self.data['s3']:
+            self.data['s3']['bucket'] = None
+        aws_region = self.data['aws']['region']
+
+        if self.options.enable_s3:
+            if not self.options.s3_bucket:
+                self.parser.print_help()
+                self.parser.error('An S3 Bucket name must be provided, to store artifacts into')
+            self.data['s3']['enable'] = True
+            s3_bucket = self.data['s3']['bucket'] = self.options.s3_bucket
+            s3_path = self.data['s3']['path'] = f'cfn_stack_rename'
+            self.data['s3']['uri'] = f'https://{s3_bucket}.s3.{aws_region}.amazonaws.com/{s3_path}'
+
+    def record_state(self, io_handle, date_stamp):
+        state_root = 'state'
+        if 'state' not in self.data:
+            self.data['state'] = dict()
+
+        self.data['state'] = dict()
+        state_location = self.data['state']['location'] = f'{state_root}/{date_stamp}'
+        self.data['state']['date'] = date_stamp
+        stack_name = self.data['state']['stack_name'] = self.options.stack_name
+        new_stack = self.data['state']['new_stack'] = self.options.new_stack
+        self.data['state']['change_set_name'] = f'stack-rename-{date_stamp}'
+        self.data['state'][stack_name] = dict()
+        self.data['state'][new_stack] = dict()
+        self.data['state'][stack_name]['description'] = dict()
+        self.data['state'][stack_name]['exports'] = dict()
+        self.data['state'][stack_name]['imported_by'] = dict()
+        self.data['state'][stack_name]['resources'] = dict()
+        self.data['state'][stack_name]['drifts'] = dict()
+        self.data['state'][stack_name]['change_set'] = dict()
+        self.data['state'][stack_name]['params'] = dict()
+        self.data['state'][stack_name]['supported_resources'] = dict()
+        self.data['state'][stack_name]['unsupported_resources'] = dict()
+        self.data['state'][stack_name]['undriftable_resources'] = dict()
+
+        current_state = dict()
+        current_state['date'] = date_stamp
+
+        io_handle.make_dir(path=state_location)
+        io_handle.write_json(output_file=f"{state_root}/current_state.json", data=current_state)
+
+    def read_state(self, io_handle):
+
+        date_stamp = io_handle.read_file('state/current_state.json')['date']
+        if self.options.time_stamp:
+            date_stamp = self.options.time_stamp
+
+        if not date_stamp:
+            self.parser.print_help()
+            self.parser.error(f'Date Stamp: {date_stamp} is empty, please provide a correct value')
+
+        state_location = f'state/{date_stamp}'
+
+        if not io_handle.dir_exists(state_location):
+            self.parser.print_help()
+            self.parser.error(f'Date Stamp: {date_stamp} is not valid {state_location} could not be found')
+
+        state_data = io_handle.read_file(f'{state_location}/state.json')
+        return date_stamp, state_data
 
     def return_data(self):
         return self.data

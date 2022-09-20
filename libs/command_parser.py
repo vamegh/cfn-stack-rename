@@ -47,9 +47,15 @@ class Commands(object):
 
     def add_aws_config(self):
         self.parser.add_argument('-r', '--region', required=False, action='store',
-                                 help='Specify the aws region, defaults to "eu-west-2"')
+                                 help='Specify the aws region, defaults to config file setting')
         self.parser.add_argument('-p', '--profile', required=False, action='store',
                                  help='Specify the aws profile, defaults to "default"')
+
+    def add_aws_s3(self):
+        self.parser.add_argument('-E', '--enable_s3', required=False, action='store_true',
+                                 help='s3 required, defaults to False')
+        self.parser.add_argument('-B', '--s3_bucket', required=False, action='store',
+                                 help='Specify the aws s3 bucket to use')
 
     def add_config(self):
         base_path = os.getcwd()
@@ -64,6 +70,11 @@ class Commands(object):
         self.parser.add_argument('-n', '--new_stack', required=True, action='store',
                                  help='Specify the new cloudformation stack name')
 
+    def add_timestamp(self):
+        self.parser.add_argument('-T', '--time_stamp', required=False, action='store', default=None,
+                                 help=f'Specify the timestamp for state, defaults to the value stored in '
+                                      f'state/current_state.json, the format should be: ddMonthyyyy-hhmmss, for '
+                                      f'example: 20Sep2022-184722')
 
     def add_output(self):
         self.parser.add_argument("--export", "-e", required=False, action='store_true',
